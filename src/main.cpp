@@ -268,7 +268,7 @@ void loop()
 			Serial.println("Крышка открыта - мгновенный сброс");
 			vTaskDelay(100 / portTICK_PERIOD_MS);
 
-			sendMsg("✅ Таблетки приняты."); // только теперь шлем сообщение
+			sendMsg("✅ Таблетки приняты.");
 		}
 	}
 }
