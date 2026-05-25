@@ -31,8 +31,6 @@ WebServer server(80);
 	{
 		if (isAlerting)
 		{
-			// ФАЗА ЗВУКА (300 мс)
-			// дробим на маленькие части по 10 мс, чтобы мгновенно среагировать
 			for (int i = 0; i < 30; i++)
 			{
 				if (!isAlerting) break;
@@ -41,7 +39,6 @@ WebServer server(80);
 			}
 			digitalWrite(BUZZER_PIN, LOW);
 
-			// ФАЗА ПАУЗЫ (800 мс)
 			for (int i = 0; i < 80; i++)
 			{
 				if (!isAlerting) break;
@@ -61,7 +58,6 @@ String callTelegram(const String &method, const String &params)
 	if (WiFiClass::status() != WL_CONNECTED) return "";
 	WiFiClientSecure client;
 	client.setInsecure();
-	// client.setRxBufferSize(1024); // если версия ядра позволяет
 
 	HTTPClient http;
 	String url = G_SCRIPT_URL + "?token=" + BOT_TOKEN + "&method=" + method + "&" + params;
@@ -172,8 +168,6 @@ void setup()
 	pinMode(BUZZER_PIN, OUTPUT);
 	digitalWrite(BUZZER_PIN, LOW);
 	pinMode(LID_SENSOR_PIN, INPUT);
-
-	// приоритет задачи пищалки ставим выше, чем у основного цикла
 	xTaskCreate(buzzerTask, "BuzzerTask", 2048, nullptr, 2, nullptr);
 
 	prefs.begin("pillbox", true);
@@ -256,7 +250,6 @@ void loop()
 				const auto cur = String(buf);
 				if ((cur == alarm1 || cur == alarm2) && cur != lastTriggeredMinute)
 				{
-					// срабатываем только если крышка ЗАКРЫТА
 					if (digitalRead(LID_SENSOR_PIN) == HIGH)
 					{
 						isAlerting = true;
@@ -267,16 +260,12 @@ void loop()
 			}
 		}
 
-		// МГНОВЕННЫЙ СБРОС
 		if (isAlerting && digitalRead(LID_SENSOR_PIN) == LOW)
 		{
-			isAlerting = false; // меняем флаг
-			digitalWrite(BUZZER_PIN, LOW); // выключаем физически
+			isAlerting = false; 
+			digitalWrite(BUZZER_PIN, LOW);
 
 			Serial.println("Крышка открыта - мгновенный сброс");
-
-			// даем процессору 100 мс, чтобы задача пищалки увидела изменения
-			// и успела зайти в блок 'else', прежде чем WiFi всё заблокирует
 			vTaskDelay(100 / portTICK_PERIOD_MS);
 
 			sendMsg("✅ Таблетки приняты."); // только теперь шлем сообщение
