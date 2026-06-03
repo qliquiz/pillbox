@@ -18,6 +18,7 @@ constexpr int RTC_RST_PIN = 1;
 constexpr int RTC_DAT_PIN = 3;
 constexpr int RTC_CLK_PIN = 4;
 constexpr int BUZZER_PIN = 5;
+constexpr int BUZZER_TONE_HZ = 2500;
 constexpr unsigned long WIFI_RETRY_INTERVAL_MS = 5UL * 60UL * 1000UL;
 constexpr unsigned long WIFI_RETRY_TIMEOUT_MS = 15000UL;
 
@@ -103,6 +104,32 @@ void setRtcDateTime(const RtcDateTime &dt)
 
 // ======================= TELEGRAM =======================
 
+String urlEncode(const String &value)
+{
+	String encoded = "";
+	for (size_t i = 0; i < value.length(); i++)
+	{
+		const auto c = static_cast<uint8_t>(value.charAt(i));
+		if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+		    c == '-' || c == '_' || c == '.' || c == '~')
+		{
+			encoded += static_cast<char>(c);
+		}
+		else if (c == ' ')
+		{
+			encoded += "%20";
+		}
+		else
+		{
+			const auto hex = "0123456789ABCDEF";
+			encoded += '%';
+			encoded += hex[c >> 4];
+			encoded += hex[c & 0x0F];
+		}
+	}
+	return encoded;
+}
+
 // Функция для добавления сообщения в очередь на отправку (не блокирует процессор)
 void sendMsg(const String &text)
 {
@@ -162,16 +189,22 @@ void serviceWiFiReconnect()
 // Функция для отправки любых запросов в Telegram через Google-прокси
 String callTelegram(const String &method, const String &params)
 {
-	if (WiFiClass::status() != WL_CONNECTED) return "";
+	if (WiFiClass::status() != WL_CONNECTED)
+	{
+		Serial.println("Telegram skipped: WiFi is not connected.");
+		return "";
+	}
+	if (BOT_TOKEN == "" || G_SCRIPT_URL == "")
+	{
+		Serial.println("Telegram skipped: BOT_TOKEN or G_SCRIPT_URL is empty.");
+		return "";
+	}
 
 	WiFiClientSecure client;
 	client.setInsecure(); // отключаем строгую проверку SSL-сертификатов Google (экономит память)
 
 	HTTPClient http;
 	String url = G_SCRIPT_URL + "?token=" + BOT_TOKEN + "&method=" + method + "&" + params;
-
-	url.replace("\n", "%0A");
-	url.replace(" ", "%20");
 
 	// Настраиваем правила HTTP-клиента
 	http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -182,8 +215,21 @@ String callTelegram(const String &method, const String &params)
 	if (http.begin(client, url))
 	{
 		const int httpCode = http.GET();
+		Serial.print("Telegram ");
+		Serial.print(method);
+		Serial.print(" HTTP ");
+		Serial.println(httpCode);
 		if (httpCode == 200) response = http.getString();
+		if (response != "")
+		{
+			Serial.print("Telegram response: ");
+			Serial.println(response.substring(0, 180));
+		}
 		http.end();
+	}
+	else
+	{
+		Serial.println("Telegram HTTP begin failed.");
 	}
 	return response;
 }
@@ -197,7 +243,14 @@ String callTelegram(const String &method, const String &params)
 		// Ждем появления сообщения в очереди. Если очередь пуста, задача "засыпает" и не тратит ресурсы процессора
 		if (xQueueReceive(msgQueue, &msgText, portMAX_DELAY) == pdPASS)
 		{
-			callTelegram("sendMessage", "chat_id=" + chatId + "&text=" + String(msgText));
+			if (chatId == "")
+			{
+				Serial.println("Telegram send skipped: Chat ID is empty.");
+			}
+			else
+			{
+				callTelegram("sendMessage", "chat_id=" + chatId + "&text=" + urlEncode(String(msgText)));
+			}
 			free(msgText); // освобождаем динамическую память, выделенную под текст
 		}
 	}
@@ -296,6 +349,17 @@ void checkBot()
 
 // ======================= РАБОТА С ЖЕЛЕЗОМ =======================
 
+void buzzerOn()
+{
+	tone(BUZZER_PIN, BUZZER_TONE_HZ);
+}
+
+void buzzerOff()
+{
+	noTone(BUZZER_PIN);
+	digitalWrite(BUZZER_PIN, LOW);
+}
+
 // Фоновая задача для пищалки (приоритет 3)
 [[noreturn]] void buzzerTask(void *pvParameters)
 {
@@ -307,10 +371,10 @@ void checkBot()
 			for (int i = 0; i < 30; i++)
 			{
 				if (!isAlerting) break; // если крышку открыли, мгновенно прерываем писк
-				digitalWrite(BUZZER_PIN, HIGH);
+				buzzerOn();
 				vTaskDelay(10 / portTICK_PERIOD_MS);
 			}
-			digitalWrite(BUZZER_PIN, LOW);
+			buzzerOff();
 
 			// ФАЗА ТИШИНЫ: ждем 800 мс, также регулярно опрашивая флаг крышки
 			for (int i = 0; i < 80; i++)
@@ -322,7 +386,7 @@ void checkBot()
 		else
 		{
 			// Если тревоги нет, гарантируем, что пищалка выключена, и "спим"
-			digitalWrite(BUZZER_PIN, LOW);
+			buzzerOff();
 			vTaskDelay(50 / portTICK_PERIOD_MS);
 		}
 	}
@@ -451,7 +515,7 @@ void serviceLidReset()
 	if (!isAlerting || isLidClosed()) return;
 
 	isAlerting = false; // сбрасываем флаг тревоги (остановит buzzerTask)
-	digitalWrite(BUZZER_PIN, LOW); // на всякий случай выключаем пищалку физически
+	buzzerOff(); // на всякий случай выключаем пищалку физически
 	Serial.println("Крышка открыта - сброс звука!");
 
 	// Даем 100 мс задержки, чтобы задача buzzerTask успела увидеть изменения
